@@ -294,23 +294,9 @@ pub fn challenge_claim(
             challenger: challenger.clone(),
             stake: stake_amount,
             gross: fixed_odds_gross,
-            profit: fixed_odds_profit,
-            reserved_creator_liability: claim.reserved_creator_liability,
-            available_creator_liquidity: claim
-                .creator_stake
-                .checked_sub(claim.reserved_creator_liability)
-                .ok_or(Error::InsufficientCreatorLiquidity)?,
         }
         .publish(env);
     }
-
-    events::ClaimChallenged {
-        id: claim_id,
-        challenger,
-        stake: stake_amount,
-    }
-    .publish(env);
-    Ok(())
 }
 
 

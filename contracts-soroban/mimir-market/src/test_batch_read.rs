@@ -13,6 +13,8 @@
 //!                duplicate ids return consistent values
 //! withdrawable – order mirrors input, unknown addresses return 0, over-sized
 //!                input is rejected before any storage read
+//! limits       – `get_contract_limits` returns a bounded, versioned response
+//!                exposing MAX_BATCH_SIZE, so clients need not probe failures
 
 extern crate std;
 
@@ -51,6 +53,56 @@ fn sdk_addrs(f: &Fixture, addrs: &[soroban_sdk::Address]) -> Vec<soroban_sdk::Ad
         v.push_back(addr.clone());
     }
     v
+}
+
+// ── limits ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn contract_limits_expose_max_batch_size_and_version() {
+    let f = Fixture::new(0, 0);
+    let limits = f.client().get_contract_limits();
+
+    assert_eq!(
+        limits.max_batch_size, MAX_BATCH_SIZE,
+        "reported batch limit must match the enforced constant"
+    );
+    assert!(limits.version >= 1, "response must carry a schema version");
+}
+
+#[test]
+fn contract_limits_match_enforced_batch_boundary() {
+    // The advertised limit must be exactly the boundary the contract enforces:
+    // a batch of `max_batch_size` is accepted, one more is rejected.
+    let f = Fixture::new(0, 0);
+    let limits = f.client().get_contract_limits();
+
+    let claim_ids = create_claims(&f, limits.max_batch_size);
+    let ok = f.client().try_get_claims_batch(&sdk_ids(&f, &claim_ids));
+    assert!(ok.is_ok(), "advertised max batch size must be accepted");
+
+    let mut over = claim_ids.clone();
+    over.push(999_999);
+    let rejected = f.client().try_get_claims_batch(&sdk_ids(&f, &over));
+    let inner = rejected
+        .expect_err("one past advertised limit must fail")
+        .unwrap_or_else(|e| panic!("expected contract error: {:?}", e));
+    assert_eq!(inner, Error::BatchTooLarge);
+}
+
+#[test]
+fn contract_limits_is_read_only() {
+    let f = Fixture::new(0, 0);
+    let claim_ids = create_claims(&f, 2);
+    let balance_before = f.escrow_balance();
+
+    let _ = f.client().get_contract_limits();
+
+    assert_eq!(
+        balance_before,
+        f.escrow_balance(),
+        "reading limits must not touch escrow"
+    );
+    assert!(f.client().get_claim(&claim_ids[0]).is_some_or_expected());
 }
 
 // ── positive ──────────────────────────────────────────────────────────────────
@@ -369,7 +421,6 @@ fn batch_includes_mixed_states() {
 
     let ids = sdk_ids(&f, &[id_open, id_active, id_resolved]);
     let batch = f.client().get_claims_batch(&ids);
-
     assert_eq!(batch.len(), 3);
     assert_eq!(
         batch.get(0).unwrap().unwrap().state,
